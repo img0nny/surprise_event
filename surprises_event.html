@@ -21,8 +21,52 @@
         @keyframes shake { 0%, 50%, 100% { transform: rotate(0deg); } 25% { transform: rotate(-5deg); } 75% { transform: rotate(5deg); } }
 
         .btn-glow-pink { box-shadow: 0 0 20px rgba(236, 72, 153, 0.5); }
-        .box-glow-blue { box-shadow: 0 0 15px rgba(59, 130, 246, 0.6), inset 0 0 10px rgba(59, 130, 246, 0.4); }
+        .btn-glow-blue { box-shadow: 0 0 20px rgba(59, 130, 246, 0.5); }
         
+        /* 로또 공 3D 애니메이션 스타일 */
+        .lottery-ball-container {
+            position: relative;
+            width: 180px;
+            height: 180px;
+            margin: 0 auto;
+        }
+        .lottery-ball {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, #fcd34d, #b45309);
+            box-shadow: inset -15px -15px 25px rgba(0,0,0,0.4), 0 15px 25px rgba(0,0,0,0.6);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 5rem;
+            font-family: 'Black Han Sans', sans-serif;
+            color: white;
+            text-shadow: 3px 3px 6px rgba(0,0,0,0.4);
+            position: relative;
+        }
+        /* 공의 빛반사 효과 */
+        .lottery-ball::after {
+            content: '';
+            position: absolute;
+            top: 15%;
+            left: 20%;
+            width: 30%;
+            height: 20%;
+            background: rgba(255,255,255,0.5);
+            border-radius: 50%;
+            transform: rotate(-45deg);
+        }
+        /* 요동치는 애니메이션 */
+        .spin-animation {
+            animation: spin-ball 0.1s linear infinite;
+        }
+        @keyframes spin-ball {
+            0% { transform: rotate(-3deg) translateY(-2px); }
+            50% { transform: rotate(3deg) translateY(2px); }
+            100% { transform: rotate(-3deg) translateY(-2px); }
+        }
+
         /* 스크롤바 숨기기 */
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
@@ -73,8 +117,8 @@
         const surpriseDocRef = doc(db, "bowling_event", "surprise_event");
 
         window.currentView = null;
-        window.playerRanks = {}; // 닉네임 -> { rank: N, score: M } 매핑
-        window.surpriseData = null; // 당첨 번호 및 열린 상자 데이터
+        window.playerRanks = {}; 
+        window.surpriseData = null; 
 
         const appDiv = document.getElementById('app');
 
@@ -88,7 +132,6 @@
                     team.members.forEach(m => allPlayers.push(m));
                 });
 
-                // 합산 점수 기준 내림차순 정렬 (동점자 발생 시 1차전 점수 -> 이름 가나다순으로 완벽한 1~16위 배정)
                 allPlayers.sort((a, b) => {
                     if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
                     if (b.score !== a.score) return b.score - a.score;
@@ -102,7 +145,7 @@
 
                 window.playerRanks = newPlayerRanks;
             } else {
-                window.playerRanks = null; // 아직 최종 결과가 안 나왔을 때
+                window.playerRanks = null; 
             }
             checkStateAndRender();
         });
@@ -115,52 +158,42 @@
                 const serverResetTime = window.surpriseData.lastReset || 0;
                 const localResetTime = localStorage.getItem('lastSurpriseReset') || 0;
                 
-                // 관리자가 리셋하면 로컬 정보 완벽 소거
                 if (serverResetTime > localResetTime) {
                     localStorage.removeItem('mySurpriseNick');
                     localStorage.setItem('lastSurpriseReset', serverResetTime);
                 }
             } else {
-                // 문서가 없으면 초기화 (1~16 사이의 랜덤 당첨 번호 지정)
                 const winNum = Math.floor(Math.random() * 16) + 1;
                 setDoc(surpriseDocRef, { winningNumber: winNum, openedBoxes: {}, lastReset: new Date().getTime() });
             }
             checkStateAndRender();
         });
 
-        // 🔄 화면 라우팅 로직
         function checkStateAndRender() {
             if (window.currentView === 'admin') return;
 
             const myNick = localStorage.getItem('mySurpriseNick');
             
-            // 2차전 결과가 없으면 대기 화면
             if (!window.playerRanks) {
                 renderWaitScreen();
                 return;
             }
 
-            // 로그인이 안 되어 있으면 홈 화면
             if (!myNick) {
                 renderHomeScreen();
                 return;
             }
 
             const myRankData = window.playerRanks[myNick];
-            // 만약 상자를 이미 열었다면 무조건 결과창으로
             if (window.surpriseData && window.surpriseData.openedBoxes && window.surpriseData.openedBoxes[myRankData.rank] === myNick) {
                 const isWinner = window.surpriseData.winningNumber === myRankData.rank;
                 renderResultScreen(isWinner);
             } 
-            // 상자를 열기 전이면 게임 화면으로
-            else {
+            else if (window.currentView !== 'lottery') {
+                // 추첨 애니메이션 중이 아닐 때만 게임 화면으로
                 renderGameScreen(myNick, myRankData.rank);
             }
         }
-
-        // ==========================================
-        // 📺 뷰 렌더링 함수들
-        // ==========================================
 
         function renderWaitScreen() {
             window.currentView = 'wait';
@@ -207,90 +240,110 @@
             }
 
             localStorage.setItem('mySurpriseNick', nick);
-            checkStateAndRender(); // 다음 화면으로 자동 이동
+            checkStateAndRender(); 
         };
 
         function renderGameScreen(myNick, myRank) {
             window.currentView = 'game';
             
-            let gridHTML = '<div class="grid grid-cols-4 gap-2 md:gap-3 w-full max-w-[320px] mx-auto mt-6 perspective">';
-            
-            for (let i = 1; i <= 16; i++) {
-                const isOpened = window.surpriseData && window.surpriseData.openedBoxes && window.surpriseData.openedBoxes[i];
-                const isWinnerBox = window.surpriseData && (window.surpriseData.winningNumber === i);
-                const isMyBox = (i === myRank);
-
-                if (isOpened) {
-                    if (isWinnerBox) {
-                        gridHTML += `<div class="aspect-square rounded-xl bg-pink-500 border border-pink-400 flex flex-col justify-center items-center shadow-lg transform scale-105"><span class="text-2xl mb-1">🏖️</span><span class="text-[10px] font-black text-white">당첨</span></div>`;
-                    } else {
-                        gridHTML += `<div class="aspect-square rounded-xl bg-slate-800 border border-slate-700 flex flex-col justify-center items-center opacity-60"><span class="text-xl mb-1 text-slate-500">💥</span><span class="text-[10px] font-bold text-slate-500">꽝</span></div>`;
-                    }
-                } else {
-                    if (isMyBox) {
-                        // 내 번호 상자 (누를 수 있음)
-                        gridHTML += `<div onclick="window.openMyBox(${i})" class="aspect-square rounded-xl bg-slate-700 border-2 border-blue-400 box-glow-blue flex flex-col justify-center items-center cursor-pointer hover:scale-105 active:scale-95 transition-all group animate-pulse"><span class="text-2xl text-blue-300 font-black comic-font group-hover:text-white transition-colors">${i}</span><span class="text-[10px] font-bold text-blue-300 bg-blue-900/50 px-1 rounded mt-1">내 번호</span></div>`;
-                    } else {
-                        // 남의 번호 상자 (누를 수 없음)
-                        gridHTML += `<div onclick="alert('앗! 본인의 등수 번호 [ ${myRank}번 ] 상자만 열 수 있습니다!')" class="aspect-square rounded-xl bg-slate-800 border border-slate-700 flex flex-col justify-center items-center cursor-not-allowed opacity-80 hover:bg-slate-700 transition-colors"><span class="text-xl text-slate-500 font-bold comic-font">${i}</span><span class="text-[9px] text-slate-600 mt-1">잠김</span></div>`;
-                    }
-                }
-            }
-            gridHTML += '</div>';
-
             appDiv.innerHTML = `
-                <div class="flex-1 flex flex-col justify-start items-center text-center fade-in pb-10">
-                    <h2 class="text-2xl title-font text-white mb-3 mt-4">숨겨진 반차를 찾아라!</h2>
+                <div class="flex-1 flex flex-col justify-center items-center text-center fade-in pb-10 w-full">
+                    <p class="text-pink-400 font-bold mb-2 comic-font text-lg tracking-widest">환영합니다!</p>
+                    <h2 class="text-3xl md:text-4xl title-font text-white mb-8">행운의 번호 확인</h2>
                     
-                    <div class="bg-slate-800 border border-slate-600 rounded-xl p-4 w-full text-center shadow-lg">
-                        <p class="text-sm text-slate-300 mb-1"><span class="text-pink-400 font-bold text-lg comic-font">${myNick}</span>님의 최종 성적은 <strong class="text-white">${myRank}위</strong> 입니다.</p>
-                        <p class="text-xs text-slate-400 break-keep">따라서 고객님의 행운의 상자 번호는 <strong class="text-blue-400 text-sm">[ ${myRank}번 ]</strong> 입니다!<br>아래에서 본인의 상자를 찾아 터치하세요.</p>
+                    <!-- 내 정보 박스 -->
+                    <div class="bg-slate-800 border border-slate-600 rounded-3xl p-6 w-full max-w-sm text-center shadow-2xl mb-10">
+                        <div class="flex justify-between items-center bg-slate-900/80 p-4 rounded-xl mb-3 border border-slate-700/50">
+                            <span class="text-slate-400 font-bold">최종 개인 등수</span>
+                            <span class="text-2xl font-black text-white">${myRank}위</span>
+                        </div>
+                        <div class="flex justify-between items-center bg-slate-900/80 p-4 rounded-xl border border-slate-700/50">
+                            <span class="text-slate-400 font-bold">나의 추첨 번호</span>
+                            <span class="text-4xl font-black text-pink-400 comic-font">${myRank}번</span>
+                        </div>
                     </div>
 
-                    ${gridHTML}
+                    <button onclick="window.startLotteryDraw(${myRank})" class="btn-glow-blue bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-black py-5 px-12 rounded-full text-2xl hover:scale-105 active:scale-95 transition-all w-full md:w-auto shadow-2xl flex items-center justify-center gap-3">
+                        <span>🎰</span> 행운의 추첨 시작하기!
+                    </button>
+                    <p class="text-slate-500 text-sm mt-4 font-bold break-keep">버튼을 누르면 즉시 당첨 결과가 공개됩니다.</p>
                 </div>
             `;
         }
 
-        // 🎁 상자 열기 (트랜잭션)
-        window.openMyBox = async function(boxId) {
+        // 🎰 로또 공 애니메이션 및 트랜잭션 처리
+        window.startLotteryDraw = async function(myRank) {
+            window.currentView = 'lottery';
             const myNick = localStorage.getItem('mySurpriseNick');
-            if (boxId !== window.playerRanks[myNick].rank) return;
 
-            appDiv.insertAdjacentHTML('beforeend', `<div id="drawOverlay" class="fixed inset-0 bg-slate-900/90 z-50 flex justify-center items-center flex-col gap-4"><div class="text-6xl animate-bounce shake">🎁</div><p class="text-pink-400 font-bold comic-font text-xl">개봉 중...</p></div>`);
+            // 1. 추첨 애니메이션 UI로 화면 교체
+            appDiv.innerHTML = `
+                <div class="flex-1 flex flex-col justify-center items-center text-center fade-in pb-10 w-full">
+                    <h2 class="text-2xl title-font text-white mb-12 animate-pulse text-pink-400 tracking-widest">행운의 번호 추첨 중...</h2>
+                    
+                    <div class="lottery-ball-container mb-12 spin-animation">
+                        <div class="lottery-ball" id="lotteryBall">?</div>
+                    </div>
+                    
+                    <p class="text-slate-300 text-xl comic-font" id="lotteryText">두근두근...</p>
+                </div>
+            `;
+
+            const ball = document.getElementById('lotteryBall');
+            const text = document.getElementById('lotteryText');
+
+            // 2. 숫자가 촤르륵 돌아가는 효과
+            let shuffleInterval = setInterval(() => {
+                ball.innerText = Math.floor(Math.random() * 16) + 1;
+            }, 80);
 
             try {
+                // 3. 백엔드에서 결과 처리 (사용자의 번호가 당첨번호인지 확인)
                 const isWinner = await runTransaction(db, async (transaction) => {
                     const sfDoc = await transaction.get(surpriseDocRef);
                     let data = sfDoc.data();
                     let opened = data.openedBoxes || {};
 
-                    if (opened[boxId]) throw "ALREADY_OPENED";
+                    // 이미 추첨 버튼을 눌렀던 경우 차단
+                    if (opened[myRank]) throw "ALREADY_OPENED";
 
-                    // 본인 이름으로 상자 개봉 기록
-                    opened[boxId] = myNick;
+                    // 개봉 처리
+                    opened[myRank] = myNick;
                     transaction.update(surpriseDocRef, { openedBoxes: opened });
 
-                    return data.winningNumber === boxId;
+                    // 당첨 여부 반환
+                    return data.winningNumber === myRank;
                 });
 
-                // 시각적 긴장감을 위해 1.5초 딜레이
+                // 4. 시각적 재미를 위해 2.5초 뒤에 결과 발표 화면으로 이동
                 setTimeout(() => {
-                    renderResultScreen(isWinner);
-                }, 1500);
+                    clearInterval(shuffleInterval);
+                    ball.innerText = myRank; // 마지막엔 본인 번호로 멈춤
+                    ball.parentElement.classList.remove('spin-animation');
+                    text.innerText = "과연 결과는?!";
+                    
+                    setTimeout(() => {
+                        renderResultScreen(isWinner);
+                    }, 500);
+                }, 2500);
 
             } catch (e) {
-                const overlay = document.getElementById('drawOverlay');
-                if(overlay) overlay.remove();
-                if (e === "ALREADY_OPENED") alert("이미 열린 상자입니다!");
-                else alert("통신 오류가 발생했습니다. 다시 시도해 주세요.");
+                clearInterval(shuffleInterval);
+                if (e === "ALREADY_OPENED") {
+                    alert("이미 추첨을 진행하셨습니다!");
+                    window.currentView = null;
+                    checkStateAndRender();
+                } else {
+                    alert("통신 오류가 발생했습니다. 다시 시도해 주세요.");
+                    window.currentView = null;
+                    checkStateAndRender();
+                }
             }
         };
 
         // 🎉 결과 화면
         function renderResultScreen(isWinner) {
             window.currentView = 'result';
-            const myNick = localStorage.getItem('mySurpriseNick');
             
             if (isWinner) {
                 appDiv.innerHTML = `
@@ -300,8 +353,8 @@
                             <h2 class="text-4xl font-black text-white comic-font tracking-wide relative z-10 mb-2">반차 당첨!!</h2>
                             <p class="text-white/90 font-bold text-lg relative z-10">축하합니다! 자유 반차권을 획득하셨습니다!</p>
                         </div>
-                        <div class="mt-8 bg-slate-800 px-6 py-4 rounded-xl border border-slate-600">
-                            <p class="text-slate-300 text-sm">지금 당장 <strong class="text-pink-400">기획자</strong>에게 화면을 보여주시고<br>환호성을 지르세요!</p>
+                        <div class="mt-8 bg-slate-800 px-6 py-4 rounded-xl border border-slate-600 w-full shadow-lg">
+                            <p class="text-slate-300 text-sm">지금 당장 <strong class="text-pink-400 text-lg">기획자</strong>에게 화면을 보여주시고<br>마음껏 환호성을 지르세요!</p>
                         </div>
                     </div>
                 `;
@@ -311,7 +364,7 @@
                         <div class="bg-slate-800 w-full py-12 rounded-3xl shadow-2xl pop-up border-2 border-slate-600 relative overflow-hidden">
                             <div class="text-[100px] mb-4 relative z-10 drop-shadow-md grayscale opacity-50 shake">💥</div>
                             <h2 class="text-3xl font-black text-slate-400 comic-font tracking-wide relative z-10 mb-2">아쉽게도 꽝입니다</h2>
-                            <p class="text-slate-500 font-bold text-sm relative z-10 break-keep">행운의 여신이 이번엔 다른 분을 선택했나 봅니다.<br>내일도 힘차게 출근해 주세요!</p>
+                            <p class="text-slate-500 font-bold text-sm relative z-10 break-keep mt-2">행운의 여신이 이번엔 다른 분을 선택했나 봅니다.<br>내일도 힘차게 출근해 주세요!</p>
                         </div>
                     </div>
                 `;
@@ -336,7 +389,7 @@
             let listHTML = '';
             for(let i=1; i<=16; i++) {
                 if(opened[i]) {
-                    listHTML += `<div class="flex justify-between bg-slate-800 px-3 py-2 border-b border-slate-700 text-sm"><span class="text-slate-400">${i}번 상자</span> <span class="${i === winNum ? 'text-pink-400 font-bold' : 'text-white'}">${opened[i]} ${i === winNum ? '(🎉당첨)' : ''}</span></div>`;
+                    listHTML += `<div class="flex justify-between bg-slate-800 px-3 py-2 border-b border-slate-700 text-sm"><span class="text-slate-400">${i}번 추첨</span> <span class="${i === winNum ? 'text-pink-400 font-bold' : 'text-white'}">${opened[i]} ${i === winNum ? '(🎉당첨)' : ''}</span></div>`;
                 }
             }
 
@@ -353,8 +406,8 @@
                     </div>
 
                     <div class="bg-slate-900 border border-slate-700 rounded-xl mb-6 overflow-hidden">
-                        <div class="bg-slate-800 px-3 py-2 font-bold text-sm text-slate-300">상자 오픈 현황</div>
-                        <div class="max-h-[30vh] overflow-y-auto no-scrollbar">${listHTML || '<div class="p-3 text-sm text-slate-500 text-center">아직 아무도 열지 않았습니다.</div>'}</div>
+                        <div class="bg-slate-800 px-3 py-2 font-bold text-sm text-slate-300">직원 추첨 현황</div>
+                        <div class="max-h-[30vh] overflow-y-auto no-scrollbar">${listHTML || '<div class="p-3 text-sm text-slate-500 text-center">아직 아무도 추첨하지 않았습니다.</div>'}</div>
                     </div>
 
                     <button onclick="window.resetSurpriseData()" class="w-full bg-red-500/10 text-red-400 border border-red-500/30 py-4 rounded-xl font-bold hover:bg-red-500 hover:text-white transition-all shadow-lg flex justify-center items-center gap-2">
@@ -365,7 +418,7 @@
         };
 
         window.resetSurpriseData = async function() {
-            if(confirm("🚨 기존 오픈 기록이 싹 날아가고 새로운 당첨 번호가 무작위로 숨겨집니다. 진행할까요?")) {
+            if(confirm("🚨 기존 추첨 기록이 싹 날아가고 새로운 당첨 번호가 무작위로 숨겨집니다. 진행할까요?")) {
                 const winNum = Math.floor(Math.random() * 16) + 1;
                 await setDoc(surpriseDocRef, { winningNumber: winNum, openedBoxes: {}, lastReset: new Date().getTime() });
                 alert("성공적으로 초기화 및 당첨 번호가 재배치되었습니다.");
