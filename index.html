@@ -44,8 +44,8 @@
             color: white;
             text-shadow: 3px 3px 6px rgba(0,0,0,0.4);
             position: relative;
+            transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
         }
-        /* 공의 빛반사 효과 */
         .lottery-ball::after {
             content: '';
             position: absolute;
@@ -57,9 +57,9 @@
             border-radius: 50%;
             transform: rotate(-45deg);
         }
-        /* 요동치는 애니메이션 */
+        /* 요동치는 애니메이션 (돌아갈 때만 적용) */
         .spin-animation {
-            animation: spin-ball 0.1s linear infinite;
+            animation: spin-ball 0.08s linear infinite;
         }
         @keyframes spin-ball {
             0% { transform: rotate(-3deg) translateY(-2px); }
@@ -67,7 +67,6 @@
             100% { transform: rotate(-3deg) translateY(-2px); }
         }
 
-        /* 스크롤바 숨기기 */
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
@@ -179,10 +178,13 @@
             }
 
             const myRankData = window.playerRanks[myNick];
+            
             if (window.surpriseData && window.surpriseData.openedBoxes && window.surpriseData.openedBoxes[myRankData.rank] === myNick) {
                 const isWinner = window.surpriseData.winningNumber === myRankData.rank;
-                // 이미 상자를 열었다면 바로 결과가 펼쳐진 상태로 표시
-                renderFinalLotteryView(isWinner, myRankData.rank);
+                // 추첨 애니메이션이 실행 중이 아닐 때만 결과 화면 강제 렌더링
+                if (window.currentView !== 'lottery') {
+                    window.renderFinalLotteryView(isWinner, myRankData.rank);
+                }
             } 
             else if (window.currentView !== 'lottery') {
                 renderGameScreen(myNick, myRankData.rank);
@@ -245,7 +247,6 @@
                     <p class="text-pink-400 font-bold mb-2 comic-font text-lg tracking-widest">환영합니다!</p>
                     <h2 class="text-3xl md:text-4xl title-font text-white mb-8">행운의 번호 확인</h2>
                     
-                    <!-- 내 정보 박스 -->
                     <div class="bg-slate-800 border border-slate-600 rounded-3xl p-6 w-full max-w-sm text-center shadow-2xl mb-10">
                         <div class="flex justify-between items-center bg-slate-900/80 p-4 rounded-xl mb-3 border border-slate-700/50">
                             <span class="text-slate-400 font-bold">최종 개인 등수</span>
@@ -260,17 +261,17 @@
                     <button onclick="window.startLotteryDraw(${myRank})" class="btn-glow-blue bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-black py-5 px-12 rounded-full text-2xl hover:scale-105 active:scale-95 transition-all w-full md:w-auto shadow-2xl flex items-center justify-center gap-3">
                         <span>🎰</span> 행운의 번호 굴리기!
                     </button>
-                    <p class="text-slate-500 text-sm mt-4 font-bold break-keep">추첨 버튼을 누르면 당첨 결과가 공개됩니다.</p>
+                    <p class="text-slate-500 text-sm mt-4 font-bold break-keep">버튼을 누르면 화려한 추첨이 시작됩니다.</p>
                 </div>
             `;
         }
 
-        // 🎰 로또 공 서서히 멈추는 애니메이션 및 트랜잭션 처리
+        // 🎰 애니메이션: 초고속 -> 서서히 느려짐 -> 정지 -> 같은 화면에 결과 표시
         window.startLotteryDraw = async function(myRank) {
             window.currentView = 'lottery';
             const myNick = localStorage.getItem('mySurpriseNick');
 
-            // 1. 공굴리기 애니메이션 화면
+            // 1. 추첨 애니메이션 화면으로 교체
             appDiv.innerHTML = `
                 <div class="flex-1 flex flex-col justify-center items-center text-center fade-in pb-10 w-full">
                     <h2 class="text-2xl title-font text-white mb-12 animate-pulse text-pink-400 tracking-widest" id="lotteryTitle">행운의 번호 추첨 중...</h2>
@@ -279,22 +280,23 @@
                         <div class="lottery-ball" id="lotteryBall">?</div>
                     </div>
                     
-                    <div id="lotteryResultArea" class="h-40 flex flex-col items-center justify-center w-full">
+                    <!-- 결과가 나타날 자리 (처음엔 두근두근 텍스트만 있음) -->
+                    <div id="lotteryResultArea" class="flex flex-col items-center justify-center w-full min-h-[160px]">
                         <p class="text-slate-300 text-2xl comic-font animate-pulse" id="lotteryText">두근두근...</p>
                     </div>
                 </div>
             `;
 
             const ball = document.getElementById('lotteryBall');
-            const title = document.getElementById('lotteryTitle');
+            const text = document.getElementById('lotteryText');
             
-            // 처음엔 초고속으로 숫자가 넘어갑니다 (0.05초 간격)
+            // 2. 초기 초고속 회전 (0.05초 간격)
             let fastSpin = setInterval(() => {
                 ball.innerText = Math.floor(Math.random() * 16) + 1;
             }, 50);
 
             try {
-                // 백엔드 트랜잭션 통신 (결과 받아오기)
+                // 3. 서버에서 당첨 여부 조회
                 const isWinner = await runTransaction(db, async (transaction) => {
                     const sfDoc = await transaction.get(surpriseDocRef);
                     let data = sfDoc.data();
@@ -307,28 +309,32 @@
                     return data.winningNumber === myRank;
                 });
 
-                // 통신이 끝난 후, 1초 뒤부터 서서히 느려지는 쪼는 맛 애니메이션 발동!
+                // 4. [핵심] 초고속 회전을 충분히 유지(2.5초) 후 서서히 느려지는 쪼는 맛 발동
                 setTimeout(() => {
                     clearInterval(fastSpin);
                     
-                    let delay = 50; // 초기 간격 (빠름)
+                    let currentDelay = 60;
+                    let steps = 0;
+                    const maxSteps = 20; // 서서히 느려지는 스텝 횟수
                     
+                    if (text) text.innerText = "번호가 좁혀집니다...!";
+
                     const slowDownSpin = () => {
-                        ball.innerText = Math.floor(Math.random() * 16) + 1;
-                        delay += 30; // 간격을 30ms씩 점점 늘립니다 (점점 느려짐)
-                        
-                        if (delay < 450) {
-                            // 아직 충분히 느려지지 않았다면 다음 번호로 회전
-                            setTimeout(slowDownSpin, delay);
+                        steps++;
+                        if (steps < maxSteps) {
+                            ball.innerText = Math.floor(Math.random() * 16) + 1;
+                            currentDelay += 25; // 딜레이를 점점 늘려 속도를 늦춤 (60 -> 85 -> 110 ...)
+                            setTimeout(slowDownSpin, currentDelay);
                         } else {
-                            // 완전히 느려졌을 때(최종) 내 번호로 딱! 멈춤
-                            renderFinalLotteryView(isWinner, myRank);
+                            // 완전히 멈출 때 내 번호 세팅
+                            ball.innerText = myRank;
+                            window.renderFinalLotteryView(isWinner, myRank);
                         }
                     };
                     
-                    slowDownSpin(); // 서서히 느려지는 회전 시작
+                    slowDownSpin();
 
-                }, 1000);
+                }, 2500); // 2.5초 동안 초고속 회전 보장
 
             } catch (e) {
                 clearInterval(fastSpin);
@@ -342,7 +348,7 @@
             }
         };
 
-        // 🎉 최종 결과 공개 화면 (공이 멈춘 상태 + 바로 밑에 당첨/꽝 카드 노출)
+        // 🎉 화면 깜빡임 없이 동일한 화면 아래에 결과 카드만 스무스하게 팝업!
         window.renderFinalLotteryView = function(isWinner, myRank) {
             window.currentView = 'result';
             
@@ -360,27 +366,54 @@
                 resultCardHTML = `
                     <div class="bg-slate-800 border-2 border-slate-600 p-6 rounded-3xl w-full max-w-sm pop-up shadow-xl">
                         <div class="text-6xl mb-3 grayscale opacity-80 shake">💥</div>
-                        <h3 class="text-4xl font-black text-slate-400 comic-font mb-2">꽝! 아쉽습니다</h3>
+                        <h3 class="text-3xl font-black text-slate-400 comic-font mb-2">꽝! 아쉽습니다</h3>
                         <p class="text-slate-500 text-sm font-bold break-keep">행운의 여신이 이번엔 비껴갔습니다.<br>내일도 힘차게 출근해 주세요!</p>
                     </div>
                 `;
             }
 
-            appDiv.innerHTML = `
-                <div class="flex-1 flex flex-col justify-center items-center text-center fade-in pb-10 w-full">
-                    <h2 class="text-3xl title-font text-yellow-400 mb-8 tracking-widest pop-up">추첨 완료!</h2>
-                    
-                    <!-- 멈춘 공 (흔들림 없는 정적인 공) -->
-                    <div class="lottery-ball-container mb-8">
-                        <div class="lottery-ball pop-up">${myRank}</div>
+            const resultArea = document.getElementById('lotteryResultArea');
+            
+            // 만약 현재 애니메이션 화면에 머물고 있다면 (DOM 교체 없이 부드럽게 팝업)
+            if (resultArea) {
+                resultArea.innerHTML = resultCardHTML;
+                
+                const title = document.getElementById('lotteryTitle');
+                if (title) {
+                    title.innerText = "추첨 완료!";
+                    title.classList.remove('animate-pulse', 'text-pink-400');
+                    title.classList.add('text-yellow-400', 'pop-up');
+                }
+                
+                const ballWrapper = document.getElementById('ballWrapper');
+                if (ballWrapper) {
+                    ballWrapper.classList.remove('spin-animation'); // 덜덜거리는 효과 중지
+                }
+                
+                const ball = document.getElementById('lotteryBall');
+                if (ball) {
+                    ball.innerText = myRank;
+                    // 공이 멈추는 순간 살짝 커졌다 돌아오는 팝업 효과
+                    ball.style.transform = "scale(1.2)";
+                    setTimeout(() => { ball.style.transform = "scale(1)"; }, 300);
+                }
+            } 
+            // 새로고침 등 다른 상황으로 인해 새로 그려야 할 때
+            else {
+                appDiv.innerHTML = `
+                    <div class="flex-1 flex flex-col justify-center items-center text-center fade-in pb-10 w-full">
+                        <h2 class="text-3xl title-font text-yellow-400 mb-8 tracking-widest pop-up">추첨 완료!</h2>
+                        
+                        <div class="lottery-ball-container mb-8">
+                            <div class="lottery-ball pop-up">${myRank}</div>
+                        </div>
+                        
+                        <div class="flex flex-col items-center justify-center w-full min-h-[160px]">
+                            ${resultCardHTML}
+                        </div>
                     </div>
-                    
-                    <!-- 당첨 / 꽝 결과 박스 -->
-                    <div id="lotteryResultArea" class="flex flex-col items-center justify-center w-full">
-                        ${resultCardHTML}
-                    </div>
-                </div>
-            `;
+                `;
+            }
         };
 
         // ==========================================
