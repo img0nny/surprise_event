@@ -57,7 +57,6 @@
             border-radius: 50%;
             transform: rotate(-45deg);
         }
-        /* 요동치는 애니메이션 (돌아갈 때만 적용) */
         .spin-animation {
             animation: spin-ball 0.08s linear infinite;
         }
@@ -88,7 +87,7 @@
     <div id="app" class="w-full max-w-md mx-auto p-4 flex-1 flex flex-col pt-12">
         <div class="flex-1 flex justify-center items-center text-slate-400 text-lg font-bold flex-col gap-4 pt-20">
             <div class="text-5xl animate-spin comic-font">🌀</div>
-            <p class="animate-pulse text-sm">최종 경기 결과를 동기화 중입니다...</p>
+            <p class="animate-pulse text-sm">데이터 동기화 중...</p>
         </div>
     </div>
 
@@ -110,18 +109,20 @@
         
         const resultDocRef = doc(db, "bowling_event", "round2_results");
         const surpriseDocRef = doc(db, "bowling_event", "surprise_event");
+        const prizeDocRef = doc(db, "bowling_event", "prizes");
 
         window.currentView = null;
         window.playerRanks = {}; 
         window.surpriseData = null; 
+        window.mainPrizeWinners = []; // 3번 앱 당첨자 기록
 
         const appDiv = document.getElementById('app');
 
+        // 1. 2차전 결과 데이터 구독 (순위 및 점수 산정)
         onSnapshot(resultDocRef, (docSnap) => {
             if (docSnap.exists() && docSnap.data().isFinal) {
                 const teamDetails = docSnap.data().teamDetails;
                 let allPlayers = [];
-                
                 teamDetails.forEach(team => {
                     team.members.forEach(m => allPlayers.push(m));
                 });
@@ -134,9 +135,12 @@
 
                 let newPlayerRanks = {};
                 allPlayers.forEach((p, idx) => {
-                    newPlayerRanks[p.name] = { rank: idx + 1, score: p.finalScore };
+                    newPlayerRanks[p.name] = { 
+                        rank: idx + 1, 
+                        score: p.finalScore,
+                        originalName: p.name
+                    };
                 });
-
                 window.playerRanks = newPlayerRanks;
             } else {
                 window.playerRanks = null; 
@@ -144,19 +148,25 @@
             checkStateAndRender();
         });
 
+        // 2. 3번 앱(상품 추첨) 결과 구독
+        onSnapshot(prizeDocRef, (docSnap) => {
+            if (docSnap.exists()) {
+                window.mainPrizeWinners = docSnap.data().winners || [];
+            }
+        });
+
+        // 3. 이벤트 상태 데이터 구독
         onSnapshot(surpriseDocRef, (docSnap) => {
             if (docSnap.exists()) {
                 window.surpriseData = docSnap.data();
-                
                 const serverResetTime = window.surpriseData.lastReset || 0;
                 const localResetTime = localStorage.getItem('lastSurpriseReset') || 0;
-                
                 if (serverResetTime > localResetTime) {
                     localStorage.removeItem('mySurpriseNick');
                     localStorage.setItem('lastSurpriseReset', serverResetTime);
                 }
             } else {
-                const winNum = Math.floor(Math.random() * 16) + 1;
+                const winNum = Math.floor(Math.random() * 15) + 2; 
                 setDoc(surpriseDocRef, { winningNumber: winNum, openedBoxes: {}, lastReset: new Date().getTime() });
             }
             checkStateAndRender();
@@ -164,26 +174,16 @@
 
         function checkStateAndRender() {
             if (window.currentView === 'admin') return;
-
             const myNick = localStorage.getItem('mySurpriseNick');
-            
-            if (!window.playerRanks) {
-                renderWaitScreen();
-                return;
-            }
-
-            if (!myNick) {
-                renderHomeScreen();
-                return;
-            }
+            if (!window.playerRanks) { renderWaitScreen(); return; }
+            if (!myNick) { renderHomeScreen(); return; }
 
             const myRankData = window.playerRanks[myNick];
-            
-            // 이미 열어본 기록이 있으면, 바로 결과창으로 넘어갑니다. (애니메이션 스킵 방지용)
             if (window.surpriseData && window.surpriseData.openedBoxes && window.surpriseData.openedBoxes[myRankData.rank] === myNick) {
-                const isWinner = window.surpriseData.winningNumber === myRankData.rank;
+                // 당첨 여부 재판정 (결과창 복구용)
+                const resultType = getSpecialResult(myNick, myRankData);
                 if (window.currentView !== 'lottery') {
-                    window.renderFinalLotteryView(isWinner, myRankData.rank);
+                    window.renderFinalLotteryView(resultType, myRankData.rank);
                 }
             } 
             else if (window.currentView !== 'lottery') {
@@ -191,13 +191,37 @@
             }
         }
 
+        // 🛡️ [특별 조건 판정기]
+        function getSpecialResult(nickname, myRankData) {
+            // 1. 1등 무조건 꽝
+            if (myRankData.rank === 1) return 'LOSE';
+
+            // 2. 이혜빈 실장님 데이터 찾기
+            const leader = window.playerRanks['이혜빈'];
+            if (leader) {
+                const isSameScore = myRankData.score === leader.score;
+                const isOneRankBelow = myRankData.rank === leader.rank + 1;
+                
+                // 3. 스타벅스 1만원 당첨 여부 확인
+                const myMainPrize = window.mainPrizeWinners.find(w => w.nickname === nickname);
+                const drawnStarbucks = myMainPrize && myMainPrize.prizeName.includes("스타벅스");
+
+                if ((isSameScore || isOneRankBelow) && drawnStarbucks) {
+                    return 'SPECIAL_GIFT';
+                }
+            }
+
+            // 4. 일반 당첨 판정
+            return (window.surpriseData.winningNumber === myRankData.rank) ? 'WIN_LEAVE' : 'LOSE';
+        }
+
         function renderWaitScreen() {
             window.currentView = 'wait';
             appDiv.innerHTML = `
                 <div class="flex-1 flex justify-center items-center text-center fade-in flex-col gap-4">
                     <div class="text-6xl mb-2">⏳</div>
-                    <h2 class="text-2xl font-bold text-slate-300 comic-font">아직 최종 결과가 집계되지 않았습니다.</h2>
-                    <p class="text-sm text-slate-500">2차전 최종 순위가 발표되면 스페셜 이벤트가 시작됩니다!</p>
+                    <h2 class="text-2xl font-bold text-slate-300 comic-font">아직 결과가 집계되지 않았습니다.</h2>
+                    <p class="text-sm text-slate-500">2차전 최종 순위 발표 후 입장이 가능합니다.</p>
                 </div>
             `;
         }
@@ -206,184 +230,117 @@
             window.currentView = 'home';
             appDiv.innerHTML = `
                 <div class="flex-1 flex flex-col justify-center items-center text-center fade-in">
-                    <p class="text-pink-400 font-bold text-lg mb-2 comic-font tracking-widest animate-pulse">마지막 스페셜 이벤트</p>
-                    <h1 class="text-4xl md:text-5xl title-font text-white mb-6 leading-tight">
-                        <br>행운의 뽑기🎳
-                    </h1>
-                    <p class="text-slate-400 text-sm mb-10 bg-slate-800 px-4 py-2 rounded-lg break-keep border border-slate-700">
-                        본인의 <strong class="text-white">최종 개인 등수</strong>가 곧 <strong class="text-pink-400">행운의 번호</strong>가 됩니다!<br>
-                        이름을 입력하여 본인의 번호를 확인하세요.
+                    <p class="text-pink-400 font-bold text-lg mb-2 comic-font tracking-widest animate-pulse">마지막 행운의 주인공은?</p>
+                    <h1 class="text-5xl md:text-6xl title-font text-white mb-6 leading-tight">반차권 뽑기🎳</h1>
+                    <p class="text-slate-400 text-sm mb-10 bg-slate-800 px-4 py-3 rounded-xl border border-slate-700 break-keep">
+                        본인의 <strong class="text-white">최종 개인 등수</strong>가 곧 <strong class="text-pink-400">행운의 번호</strong>입니다!<br>
+                        이름을 입력하여 입장하세요.
                     </p>
-                    
                     <div class="w-full max-w-[280px] mb-6">
-                        <input type="text" id="nickInput" placeholder="본인의 닉네임 입력" class="w-full bg-slate-800 border border-slate-600 text-white rounded-xl px-4 py-3 text-center text-xl focus:outline-none focus:border-pink-500 font-black comic-font transition-all shadow-inner">
+                        <input type="text" id="nickInput" placeholder="닉네임 입력" class="w-full bg-slate-800 border border-slate-600 text-white rounded-xl px-4 py-3 text-center text-xl focus:outline-none focus:border-pink-500 font-black comic-font transition-all shadow-inner">
                     </div>
-
-                    <button onclick="window.loginSurprise()" class="btn-glow-pink bg-gradient-to-r from-pink-500 to-rose-600 text-white font-black py-4 px-12 rounded-full text-xl hover:scale-105 active:scale-95 transition-all shadow-lg">
-                        입장하기
-                    </button>
+                    <button onclick="window.loginSurprise()" class="btn-glow-pink bg-gradient-to-r from-pink-500 to-rose-600 text-white font-black py-4 px-12 rounded-full text-xl hover:scale-105 active:scale-95 transition-all shadow-lg">입장하기</button>
                 </div>
             `;
         }
 
         window.loginSurprise = function() {
             const nick = document.getElementById('nickInput').value.trim();
-            if (!nick) {
-                alert("이름을 입력해주세요!"); return;
-            }
-            if (!window.playerRanks[nick]) {
-                alert(`"${nick}"님은 2차전 최종 명단에 존재하지 않습니다.\n이름을 정확하게 입력했는지 확인해주세요!`); return;
-            }
-
+            if (!nick) { alert("이름을 입력해주세요!"); return; }
+            if (!window.playerRanks[nick]) { alert(`"${nick}"님은 최종 명단에 없습니다. 정확히 입력해주세요!`); return; }
             localStorage.setItem('mySurpriseNick', nick);
             checkStateAndRender(); 
         };
 
         function renderGameScreen(myNick, myRank) {
             window.currentView = 'game';
-            
+            const specialMsg = (myRank === 1) ? "MVP의 품격! 행운까지 거머쥘까요?" : "오늘의 운세를 확인해보세요!";
             appDiv.innerHTML = `
                 <div class="flex-1 flex flex-col justify-center items-center text-center fade-in pb-10 w-full">
-                    <p class="text-pink-400 font-bold mb-2 comic-font text-lg tracking-widest">환영합니다!</p>
-                    <h2 class="text-3xl md:text-4xl title-font text-white mb-8">행운의 번호 확인</h2>
-                    
+                    <p class="text-pink-400 font-bold mb-2 comic-font text-lg tracking-widest">${specialMsg}</p>
+                    <h2 class="text-3xl md:text-4xl title-font text-white mb-8">나의 추첨 정보</h2>
                     <div class="bg-slate-800 border border-slate-600 rounded-3xl p-6 w-full max-w-sm text-center shadow-2xl mb-10">
-                        <div class="flex justify-between items-center bg-slate-900/80 p-4 rounded-xl mb-3 border border-slate-700/50">
-                            <span class="text-slate-400 font-bold">최종 개인 등수</span>
-                            <span class="text-2xl font-black text-white">${myRank}위</span>
-                        </div>
-                        <div class="flex justify-between items-center bg-slate-900/80 p-4 rounded-xl border border-slate-700/50">
-                            <span class="text-slate-400 font-bold">나의 추첨 번호</span>
-                            <span class="text-4xl font-black text-pink-400 comic-font">${myRank}번</span>
-                        </div>
+                        <div class="flex justify-between items-center bg-slate-900/80 p-4 rounded-xl mb-3 border border-slate-700/50"><span class="text-slate-400 font-bold">개인 등수</span><span class="text-2xl font-black text-white">${myRank}위</span></div>
+                        <div class="flex justify-between items-center bg-slate-900/80 p-4 rounded-xl border border-slate-700/50"><span class="text-slate-400 font-bold">행운 번호</span><span class="text-4xl font-black text-pink-400 comic-font">${myRank}번</span></div>
                     </div>
-
-                    <button onclick="window.startLotteryDraw(${myRank})" class="btn-glow-blue bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-black py-5 px-12 rounded-full text-2xl hover:scale-105 active:scale-95 transition-all w-full md:w-auto shadow-2xl flex items-center justify-center gap-3">
-                        <span>🎰</span> 행운의 번호 굴리기!
-                    </button>
-                    <p class="text-slate-500 text-sm mt-4 font-bold break-keep">버튼을 누르면 화려한 추첨이 시작됩니다.</p>
+                    <button onclick="window.startLotteryDraw(${myRank})" class="btn-glow-blue bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-black py-5 px-12 rounded-full text-2xl hover:scale-105 active:scale-95 transition-all w-full md:w-auto shadow-2xl flex items-center justify-center gap-3"><span>🎰</span> 행운의 번호 굴리기!</button>
                 </div>
             `;
         }
 
-        // 🎰 애니메이션: 초고속 -> 서서히 느려짐 -> 물음표(?) 정지 -> 결과 확인 버튼
         window.startLotteryDraw = async function(myRank) {
             window.currentView = 'lottery';
             const myNick = localStorage.getItem('mySurpriseNick');
-
-            // 1. 추첨 애니메이션 화면으로 교체
             appDiv.innerHTML = `
                 <div class="flex-1 flex flex-col justify-center items-center text-center fade-in pb-10 w-full">
                     <h2 class="text-2xl title-font text-white mb-12 animate-pulse text-pink-400 tracking-widest" id="lotteryTitle">행운의 번호 섞는 중...</h2>
-                    
-                    <div class="lottery-ball-container mb-12 spin-animation" id="ballWrapper">
-                        <div class="lottery-ball" id="lotteryBall">?</div>
-                    </div>
-                    
-                    <!-- 결과 버튼이 나타날 자리 -->
-                    <div id="lotteryResultArea" class="flex flex-col items-center justify-center w-full min-h-[160px]">
-                        <p class="text-slate-300 text-2xl comic-font animate-pulse" id="lotteryText">두근두근...</p>
-                    </div>
+                    <div class="lottery-ball-container mb-12 spin-animation" id="ballWrapper"><div class="lottery-ball" id="lotteryBall">?</div></div>
+                    <div id="lotteryResultArea" class="flex flex-col items-center justify-center w-full min-h-[160px]"><p class="text-slate-300 text-2xl comic-font animate-pulse" id="lotteryText">두근두근...</p></div>
                 </div>
             `;
-
             const ball = document.getElementById('lotteryBall');
             const text = document.getElementById('lotteryText');
-            
-            // 2. 초기 초고속 회전 (0.05초 간격으로 무작위 숫자 롤링)
-            let fastSpin = setInterval(() => {
-                ball.innerText = Math.floor(Math.random() * 16) + 1;
-            }, 50);
+            let shuffleTimer = setInterval(() => { ball.innerText = Math.floor(Math.random() * 15) + 1; }, 60);
 
             try {
-                // 3. 서버에서 당첨 여부 조회 (결과는 isWinner에 담아둠)
-                const isWinner = await runTransaction(db, async (transaction) => {
+                const resultType = await runTransaction(db, async (transaction) => {
                     const sfDoc = await transaction.get(surpriseDocRef);
                     let data = sfDoc.data();
                     let opened = data.openedBoxes || {};
-
                     if (opened[myRank]) throw "ALREADY_OPENED";
                     opened[myRank] = myNick;
                     transaction.update(surpriseDocRef, { openedBoxes: opened });
-
-                    return data.winningNumber === myRank;
+                    return getSpecialResult(myNick, window.playerRanks[myNick]);
                 });
 
-                // 4. [핵심] 초고속 회전을 잠시(1초) 감상한 후, 서서히 느려지는 쪼는 맛 발동
                 setTimeout(() => {
-                    clearInterval(fastSpin);
-                    
-                    let currentDelay = 50;
+                    clearInterval(shuffleTimer);
+                    let currentDelay = 80;
                     let steps = 0;
-                    const maxSteps = 12; // 서서히 늦추는 횟수
-                    
-                    if (text) text.innerText = "번호가 좁혀집니다...!";
-
                     const slowDownSpin = () => {
                         steps++;
-                        if (steps < maxSteps) {
+                        if (steps < 15) {
                             ball.innerText = Math.floor(Math.random() * 16) + 1;
-                            currentDelay += 40; // 딜레이를 점점 늘려 공이 느려지게 만듦
+                            currentDelay += 45;
                             setTimeout(slowDownSpin, currentDelay);
                         } else {
-                            // 완전히 멈출 때 물음표(?)로 세팅!
                             ball.innerText = '?';
-                            
                             const title = document.getElementById('lotteryTitle');
-                            if (title) {
-                                title.innerText = "추첨 완료!";
-                                title.classList.remove('animate-pulse', 'text-pink-400');
-                                title.classList.add('text-yellow-400', 'pop-up');
-                            }
-
-                            const ballWrapper = document.getElementById('ballWrapper');
-                            if (ballWrapper) {
-                                ballWrapper.classList.remove('spin-animation'); // 흔들림 애니메이션 제거
-                                ball.style.transform = "scale(1.1)";
-                                setTimeout(() => { ball.style.transform = "scale(1)"; }, 200);
-                            }
-
-                            // 물음표 아래에 [결과 확인하기] 버튼 등장
+                            if (title) { title.innerText = "추첨 완료!"; title.classList.add('text-yellow-400', 'pop-up'); }
+                            if (document.getElementById('ballWrapper')) document.getElementById('ballWrapper').classList.remove('spin-animation');
                             const resultArea = document.getElementById('lotteryResultArea');
                             if (resultArea) {
-                                resultArea.innerHTML = `
-                                    <button onclick="window.renderFinalLotteryView(${isWinner}, ${myRank})" class="btn-glow-pink bg-gradient-to-r from-pink-500 to-rose-600 text-white font-black py-4 px-10 rounded-full text-2xl hover:scale-105 active:scale-95 transition-all shadow-2xl pop-up flex items-center justify-center gap-3 w-full max-w-[280px]">
-                                        <span>🎁</span> 결과 확인하기!
-                                    </button>
-                                    <p class="text-slate-400 text-sm mt-4 fade-in font-bold">버튼을 눌러 당첨 여부를 확인하세요.</p>
-                                `;
+                                resultArea.innerHTML = `<button onclick="window.renderFinalLotteryView('${resultType}', ${myRank})" class="btn-glow-pink bg-gradient-to-r from-pink-500 to-rose-600 text-white font-black py-4 px-10 rounded-full text-2xl hover:scale-105 active:scale-95 transition-all shadow-2xl pop-up flex items-center justify-center gap-3 w-full max-w-[280px]"><span>🎁</span> 결과 확인하기!</button>`;
                             }
                         }
                     };
-                    
                     slowDownSpin();
-
-                }, 1000); 
-
+                }, 1500); 
             } catch (e) {
-                clearInterval(fastSpin);
-                if (e === "ALREADY_OPENED") {
-                    alert("이미 추첨 버튼을 누르셨습니다! 기존 결과를 불러옵니다.");
-                    const isWinnerData = window.surpriseData.winningNumber === myRank;
-                    window.renderFinalLotteryView(isWinnerData, myRank); // 애니메이션 건너뛰고 결과창 렌더링
-                } else {
-                    alert("통신 오류가 발생했습니다. 다시 시도해 주세요.");
-                    window.currentView = null;
-                    checkStateAndRender();
-                }
+                clearInterval(shuffleTimer);
+                alert(e === "ALREADY_OPENED" ? "이미 추첨하셨습니다!" : "통신 오류가 발생했습니다.");
+                window.currentView = null; checkStateAndRender();
             }
         };
 
-        // 🎉 버튼을 누르면 완전히 다른 페이지(결과창)로 넘어가서 발표
-        window.renderFinalLotteryView = function(isWinner, myRank) {
+        window.renderFinalLotteryView = function(resultType, myRank) {
             window.currentView = 'result';
-            
             let resultCardHTML = '';
-            
-            if (isWinner) {
+
+            if (resultType === 'SPECIAL_GIFT') {
+                resultCardHTML = `
+                    <div class="bg-gradient-to-br from-purple-600 to-indigo-700 border-4 border-yellow-400 p-8 rounded-3xl w-full max-w-sm pop-up shadow-[0_0_60px_rgba(234,179,8,0.6)] relative overflow-hidden">
+                        <div class="absolute -right-4 -top-4 text-6xl opacity-20">💖</div>
+                        <div class="text-6xl mb-4 animate-bounce">🎁</div>
+                        <h3 class="text-2xl font-black text-yellow-300 comic-font mb-2 leading-tight">이혜빈 실장님의<br>특별 선물 당첨!</h3>
+                        <p class="text-white text-xl font-bold mb-2">🌿 올리브영 3만원권</p>
+                        <p class="text-indigo-200 text-xs font-medium">실장님이 따로 준비하신 깜짝 선물입니다!</p>
+                    </div>
+                `;
+            } else if (resultType === 'WIN_LEAVE') {
                 resultCardHTML = `
                     <div class="bg-pink-500/20 border-2 border-pink-400 p-8 rounded-3xl w-full max-w-sm pop-up shadow-[0_0_50px_rgba(236,72,153,0.6)]">
-                        <div class="text-6xl mb-4 animate-bounce">🎳</div>
+                        <div class="text-6xl mb-4 animate-bounce">🏖️</div>
                         <h3 class="text-4xl font-black text-pink-400 comic-font mb-2">반차 당첨!!</h3>
                         <p class="text-white text-sm font-bold">기획자에게 화면을 보여주시고 마음껏 환호하세요!</p>
                     </div>
@@ -398,79 +355,41 @@
                 `;
             }
 
-            // 페이지 전체를 덮어씌워 완전히 새로운 화면(다음 페이지)으로 이동하는 연출
             appDiv.innerHTML = `
                 <div class="flex-1 flex flex-col justify-center items-center text-center fade-in pb-10 w-full">
                     <p class="text-pink-400 font-bold mb-2 comic-font text-lg tracking-widest pop-up">나의 추첨 번호 : [ ${myRank}번 ]</p>
-                    <h2 class="text-4xl title-font text-white mb-10 pop-up">최종 결과</h2>
-                    
-                    <div class="flex flex-col items-center justify-center w-full">
-                        ${resultCardHTML}
-                    </div>
-                    
-                    <button onclick="window.currentView=null; checkStateAndRender();" class="mt-12 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 px-8 rounded-full border border-slate-600 transition-all text-sm">
-                        처음 화면으로
-                    </button>
+                    <h2 class="text-4xl title-font text-white mb-10 pop-up">최종 결과 발표</h2>
+                    <div class="flex flex-col items-center justify-center w-full">${resultCardHTML}</div>
+                    <button onclick="window.currentView=null; checkStateAndRender();" class="mt-12 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 px-8 rounded-full border border-slate-600 transition-all text-sm">처음 화면으로</button>
                 </div>
             `;
         };
 
-        // ==========================================
-        // 🛠️ 관리자 로직
-        // ==========================================
-        window.enterAdminMode = function() {
-            const pw = prompt("관리자 비밀번호를 입력하세요.");
-            if (pw === "0000") window.renderAdminScreen();
-            else if (pw !== null) alert("비밀번호 불일치");
-        };
-
+        window.enterAdminMode = function() { if (prompt("비밀번호") === "0000") window.renderAdminScreen(); };
         window.renderAdminScreen = function() {
             window.currentView = 'admin';
-            
             const winNum = window.surpriseData ? window.surpriseData.winningNumber : '?';
             const opened = window.surpriseData ? (window.surpriseData.openedBoxes || {}) : {};
-            
             let listHTML = '';
             for(let i=1; i<=16; i++) {
-                if(opened[i]) {
-                    listHTML += `<div class="flex justify-between bg-slate-800 px-3 py-2 border-b border-slate-700 text-sm"><span class="text-slate-400">${i}번 추첨자</span> <span class="${i === winNum ? 'text-pink-400 font-bold' : 'text-white'}">${opened[i]} ${i === winNum ? '(🎉당첨)' : ''}</span></div>`;
-                }
+                if(opened[i]) listHTML += `<div class="flex justify-between bg-slate-800 px-3 py-2 border-b border-slate-700 text-sm"><span class="text-slate-400">${i}번</span> <span class="text-white">${opened[i]}</span></div>`;
             }
-
             appDiv.innerHTML = `
                 <div class="flex-1 flex flex-col w-full fade-in pb-10">
-                    <div class="flex justify-between items-center mb-6">
-                        <h2 class="text-xl title-font text-white">⚙️ 스페셜 이벤트 관리자</h2>
-                        <button onclick="window.currentView=null; checkStateAndRender();" class="text-slate-400 text-sm hover:text-white bg-slate-800 px-3 py-1 rounded-full border border-slate-700">닫기 ✖</button>
-                    </div>
-                    
-                    <div class="bg-pink-900/30 border border-pink-500/50 p-4 rounded-xl mb-4 text-center">
-                        <p class="text-pink-400 font-bold mb-1">현재 당첨 번호 (비밀 유지!)</p>
-                        <p class="text-4xl title-font text-white">${winNum} 번</p>
-                    </div>
-
-                    <div class="bg-slate-900 border border-slate-700 rounded-xl mb-6 overflow-hidden">
-                        <div class="bg-slate-800 px-3 py-2 font-bold text-sm text-slate-300">직원 추첨 현황</div>
-                        <div class="max-h-[30vh] overflow-y-auto no-scrollbar">${listHTML || '<div class="p-3 text-sm text-slate-500 text-center">아직 아무도 추첨하지 않았습니다.</div>'}</div>
-                    </div>
-
-                    <button onclick="window.resetSurpriseData()" class="w-full bg-red-500/10 text-red-400 border border-red-500/30 py-4 rounded-xl font-bold hover:bg-red-500 hover:text-white transition-all shadow-lg flex justify-center items-center gap-2">
-                        <span>🚨</span> 당첨 번호 초기화 & 다시 섞기
-                    </button>
+                    <div class="flex justify-between items-center mb-6"><h2 class="text-xl title-font text-white">⚙️ 관리자</h2><button onclick="window.currentView=null; checkStateAndRender();" class="text-slate-400 text-sm bg-slate-800 px-3 py-1 rounded-full border border-slate-700">닫기</button></div>
+                    <div class="bg-pink-900/30 border border-pink-500/50 p-4 rounded-xl mb-4 text-center"><p class="text-pink-400 font-bold mb-1">당첨 번호 (1등 제외)</p><p class="text-4xl title-font text-white">${winNum} 번</p></div>
+                    <div class="bg-slate-900 border border-slate-700 rounded-xl mb-6 overflow-hidden max-h-[40vh] overflow-y-auto no-scrollbar">${listHTML || '<p class="p-3 text-slate-500 text-center">기록 없음</p>'}</div>
+                    <button onclick="window.resetSurpriseData()" class="w-full bg-red-500/20 text-red-400 border border-red-500/30 py-4 rounded-xl font-bold hover:bg-red-500 hover:text-white transition-all">🚨 당첨 번호 초기화 & 다시 섞기</button>
                 </div>
             `;
         };
-
         window.resetSurpriseData = async function() {
-            if(confirm("🚨 기존 추첨 기록이 싹 날아가고 새로운 당첨 번호가 무작위로 숨겨집니다. 진행할까요?")) {
-                const winNum = Math.floor(Math.random() * 16) + 1;
+            if(confirm("기초화할까요?")) {
+                const winNum = Math.floor(Math.random() * 15) + 2; 
                 await setDoc(surpriseDocRef, { winningNumber: winNum, openedBoxes: {}, lastReset: new Date().getTime() });
-                alert("성공적으로 초기화 및 당첨 번호가 재배치되었습니다.");
-                window.currentView = null;
-                checkStateAndRender();
+                window.currentView = null; checkStateAndRender();
             }
         };
-
     </script>
 </body>
 </html>
